@@ -28,11 +28,43 @@ const jsonRpcProvider = new providers.JsonRpcProvider(
   process.env.HTTP_PROVIDER
 );
 
-const mintCount: Record<string, number> = {};
+let mintCount: Record<string, number> = {};
 
-(async () => {
-  Promise.all([await parseMinters(), await parseTokenTransfers()]);
-})();
+async function parseMinters() {
+  signale.info("Getting minting event log from Etherscan...");
+
+  const eventLog = await etherscanProvider.getLogs({
+    address: MINTING_CONTRACT,
+    fromBlock: 0,
+    topics: [MINT_TOPIC],
+  });
+
+  signale.success("Got minting event log, parsing...");
+
+  for (const event of eventLog) {
+    const transaction = await jsonRpcProvider.getTransaction(
+      event.transactionHash
+    );
+
+    const from = utils.getAddress(transaction.from);
+
+    const totalMinted =
+      Number(utils.formatEther(transaction.value)) / MINT_PRICE;
+
+    if (mintCount[from]) {
+      mintCount[from] += totalMinted;
+    } else {
+      mintCount[from] = totalMinted;
+    }
+  }
+
+  fs.writeFileSync(
+    path.join(__dirname, "../minters.json"),
+    JSON.stringify(mintCount)
+  );
+
+  signale.success("Successfully created total minted by address snapshot.");
+}
 
 async function parseTokenTransfers() {
   signale.info("Getting token event log from Etherscan...");
@@ -91,9 +123,13 @@ async function parseTokenTransfers() {
   }
 
   // get refund values
-
   Object.keys(mintCount).map(
     (key) => (mintCount[key] = Number((mintCount[key] * 0.08).toFixed(2)))
+  );
+
+  // remove falsy values
+  mintCount = Object.fromEntries(
+    Object.entries(mintCount).filter(([_, v]) => v)
   );
 
   fs.writeFileSync(
@@ -113,38 +149,6 @@ async function parseTokenTransfers() {
   signale.success("Successfully created refund & disperse snapshot.");
 }
 
-async function parseMinters() {
-  signale.info("Getting minting event log from Etherscan...");
-
-  const eventLog = await etherscanProvider.getLogs({
-    address: MINTING_CONTRACT,
-    fromBlock: 0,
-    topics: [MINT_TOPIC],
-  });
-
-  signale.success("Got minting event log, parsing...");
-
-  for (const event of eventLog) {
-    const transaction = await jsonRpcProvider.getTransaction(
-      event.transactionHash
-    );
-
-    const from = utils.getAddress(transaction.from);
-
-    const totalMinted =
-      Number(utils.formatEther(transaction.value)) / MINT_PRICE;
-
-    if (mintCount[from]) {
-      mintCount[from] += totalMinted;
-    } else {
-      mintCount[from] = totalMinted;
-    }
-  }
-
-  fs.writeFileSync(
-    path.join(__dirname, "../minters.json"),
-    JSON.stringify(mintCount)
-  );
-
-  signale.success("Successfully created total minted by address snapshot.");
-}
+(async () => {
+  Promise.all([await parseMinters(), await parseTokenTransfers()]);
+})();
